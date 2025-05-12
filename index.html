@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<body>
+<div id="container">
+    <video id="localVideo" playsinline autoplay muted></video>
+    <video id="remoteVideo" playsinline autoplay></video>
+
+    <div class="box">
+        <button id="startButton">Start</button>
+        <button id="callButton">Call</button>
+        <button id="hangupButton">Hang Up</button>
+    </div>
+
+</div>
+<script type="module">
+import { initMomento, subscribeToMessages, publish, setKey, valueExists, deleteKey, getKey } from '/src/momento.js';
+
+initMomento();
+subscribeToMessages('cache', 'agent:xyz:inbox', onEvent)
+
+const startButton = document.getElementById('startButton');
+const hangupButton = document.getElementById('hangupButton');
+const callButton = document.getElementById('callButton');
+hangupButton.disabled = true;
+
+const localVideo = document.getElementById('localVideo');
+const remoteVideo = document.getElementById('remoteVideo');
+
+let pc;
+let localStream;
+
+const allThere = async (from, totalParts) => {
+    for (let index = 1; index <= totalParts; index++) {
+      console.log(`checking cache.. if ${from}-${index} has a value`)
+      const exists = await valueExists("cache", `${from}-${index}`)
+      if (!exists) {
+        console.log(`we did not find ${from}-${index}`)
+        return false
+      }
+    }
+    return true
+  }
+
+  const pieceTogether = async (from, totalParts) => {
+    let message = ""
+    for (let index = 1; index <= totalParts; index++) {
+      const value = await getKey("cache", `${from}-${index}`)
+      // We dont want them chilling in the cache
+      deleteKey('cache',`${from}-${index}`)
+      message += value ?? ""
+    }
+    console.log(`Assembled full SDP: ${message}`)
+    return message
+  }
+
+// MAIN EVENT HANDLER
+async function onEvent(e){
+
+  console.log('event', e);
+  
+  switch (e.type) {
+    case 'offer':
+      // A visitor is sending an offer
+      // These come in 2 parts (limits on message size), so we need to
+      // 1. Receive the offer and the part count
+      // 2. Just save it in the cache
+      // 3. Check if we have all the parts
+      // 4. If we do, we will piece it together
+      // 5. We need to set up the local stream
+      // 6. Set the remote description with the offer
+      // 7. Create an answer
+      // 8. Send the answer back to the visitor in 2 parts
+      // 9. Set the local description with the answer
+      // 10. Set the state to active
+      // 1. Receive the offer and the part count
+      const { part, totalParts, sdpFragment, from } = e
+      // 2. Just save it in the cache
+      await setKey("cache", `${from}-${part}`, sdpFragment)
+      // 3. Check if we have all the parts
+      const ready = await allThere(from, totalParts)
+      console.log(`ready: ${ready}`)
+      if (ready) {
+        // 4. If we do, we will piece it together
+        const fullSdp = await pieceTogether(from, totalParts)
+        //console.log("Assembled full SDP:", fullSdp)
+
+
+          // 5.1 Create a new peer connection
+          if (pc) {
+            console.error('existing peerconnection');
+            return;
+          }
+          await createPeerConnection();
+
+          // 6. Set the remote description with the offer
+          await pc.setRemoteDescription({type: 'offer', sdp: fullSdp})
+
+          // 7. Create an answer
+          const answer = await pc.createAnswer();
+          console.log(`Answer: ${answer}`)
+
+          // 8. Send the answer back to the visitor in 2 parts
+          const midpoint = Math.ceil(answer?.sdp?.length / 2)
+          const part1 = answer?.sdp.toString().slice(0, midpoint)
+          const part2 = answer?.sdp.toString().slice(midpoint)
+          //TODO: FROM NEEDS TO BE DYNAMIC
+          const sdpAnswerPart1 = {
+            from: 'xyz',
+            type: "answer",
+            part: "1",
+            totalParts: "2",
+            sdpFragment: part1,
+          }
+          const sdpAnswerPart2 = {
+            from: 'xyz',
+            type: "answer",
+            part: "2",
+            totalParts: "2",
+            sdpFragment: part2,
+          }
+          console.log(`${sdpAnswerPart1} ${sdpAnswerPart2}`)
+          await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1))
+          await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2))
+        }    
+      break;
+    case 'answer':
+      handleAnswer(e);
+      break;
+    case 'candidate':
+      handleCandidate(e);
+      break;
+    case 'call':
+      const acceptCallMessage = {
+        from: 'xyz',
+        type: 'call-accepted',
+      }
+      // 5. We need to set up the local stream
+      localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+      localVideo.srcObject = localStream;
+      
+      await publish('cache','visitor:abc:inbox', JSON.stringify(acceptCallMessage))
+      break;
+    case 'ready':
+      // A second tab joined. This tab will initiate a call unless in a call already.
+      if (pc) {
+        console.log('already in call, ignoring');
+        return;
+      }
+      makeCall();
+      break;
+    case 'bye':
+      if (pc) {
+        hangup();
+      }
+      break;
+    default:
+      console.log('unhandled', e);
+      break;
+  }
+}
+
+callButton.onclick = async () => {
+
+  startButton.disabled = true;
+  hangupButton.disabled = false;
+
+  const callMessage = {
+    from: 'abc',
+    type: "call",
+  }
+
+  publish('cache','agent:xyz:inbox', JSON.stringify(callMessage))
+
+};
+
+startButton.onclick = async () => {
+  localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+  localVideo.srcObject = localStream;
+
+
+  startButton.disabled = true;
+  hangupButton.disabled = false;
+
+  signaling.postMessage({type: 'ready'});
+};
+
+hangupButton.onclick = async () => {
+  hangup();
+  signaling.postMessage({type: 'bye'});
+};
+
+async function hangup() {
+  if (pc) {
+    pc.close();
+    pc = null;
+  }
+  localStream.getTracks().forEach(track => track.stop());
+  localStream = null;
+  startButton.disabled = false;
+  hangupButton.disabled = true;
+};
+
+function createPeerConnection() {
+  pc = new RTCPeerConnection();
+  pc.onicecandidate = e => {
+    const message = {
+      type: 'candidate',
+      candidate: null,
+    };
+    if (e.candidate) {
+      message.candidate = e.candidate.candidate;
+      message.sdpMid = e.candidate.sdpMid;
+      message.sdpMLineIndex = e.candidate.sdpMLineIndex;
+    }
+    //signaling.postMessage(message);
+  };
+  pc.ontrack = e => remoteVideo.srcObject = e.streams[0];
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+}
+
+async function makeCall() {
+  await createPeerConnection();
+
+  const offer = await pc.createOffer();
+  signaling.postMessage({type: 'offer', sdp: offer.sdp});
+  await pc.setLocalDescription(offer);
+}
+
+async function handleOffer(offer) {
+  localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+  localVideo.srcObject = localStream;
+
+  if (pc) {
+    console.error('existing peerconnection');
+    return;
+  }
+
+  await createPeerConnection();
+  await pc.setRemoteDescription(offer);
+
+  const answer = await pc.createAnswer();
+  signaling.postMessage({type: 'answer', sdp: answer.sdp});
+  await pc.setLocalDescription(answer);
+}
+
+async function handleAnswer(answer) {
+  if (!pc) {
+    console.error('no peerconnection');
+    return;
+  }
+  await pc.setRemoteDescription(answer);
+}
+
+async function handleCandidate(candidate) {
+  if (!pc) {
+    console.error('no peerconnection');
+    return;
+  }
+  if (!candidate.candidate) {
+    await pc.addIceCandidate(null);
+  } else {
+    await pc.addIceCandidate(candidate);
+  }
+}
+</script>
+</body>
+</html>
