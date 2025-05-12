@@ -1,6 +1,9 @@
-    // vite.config.js
-    export default {
-        server: {
-            allowedHosts: ["admittedly-massive-teal.ngrok-free.app"]
-        }
-    }
+// vite.config.js
+import { defineConfig } from 'vite';
+
+export default defineConfig({
+  optimizeDeps: {
+    base: '/facepop/',
+    include: ['@gomomento/sdk-web']
+  },
+});

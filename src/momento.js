@@ -6,7 +6,8 @@ let momentoCache;
 
 export async function initMomento() {
     console.log(`initializing momento client`);
-    const authToken=process.env.MOMENTO_AUTH_TOKEN;
+    const authToken = import.meta.env.VITE_MOMENTO_AUTH_TOKEN;
+    console.log(`auth token: ${authToken}`);
     const credentials = CredentialProvider.fromString({apiKey: authToken})
     // const configuration = Configurations.Laptop.v1();
     // // const props: CacheClientProps = {

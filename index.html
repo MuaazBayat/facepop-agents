@@ -13,7 +13,7 @@
 
 </div>
 <script type="module">
-import { initMomento, subscribeToMessages, publish, setKey, valueExists, deleteKey, getKey } from '/src/momento.js';
+import { initMomento, subscribeToMessages, publish  } from './src/momento.js';
 
 initMomento();
 subscribeToMessages('cache', 'agent:xyz:inbox', onEvent)
