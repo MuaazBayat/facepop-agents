@@ -1,3 +1,5 @@
+![Alt text](/public/ividiyo.png "ividiyo logo")
+
 # 🧑‍💼 FacePop Agents – P2P Video Modal
 
 This is the **Agent Interface** for the **P2P Video Modal**, a real-time video calling system designed to help small businesses engage visitors and boost conversion. Built with **Vanilla JS**, **Vite**, and powered by **WebRTC** and **Momento**, this tool allows agents to respond to embedded video call requests from website users in real time.
