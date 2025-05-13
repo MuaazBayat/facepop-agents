@@ -2,8 +2,8 @@
 <html>
 <body>
 <div id="container">
-    <video id="localVideo" playsinline autoplay muted></video>
-    <video id="remoteVideo" playsinline autoplay></video>
+    <video id="localVideo" autoplay muted></video>
+    <video id="remoteVideo" autoplay></video>
 
     <div class="box">
         <button id="startButton">Start</button>
@@ -28,6 +28,10 @@ const remoteVideo = document.getElementById('remoteVideo');
 
 let pc;
 let localStream;
+let remoteStream;
+let remoteCandidatesBuffer = [];
+let remoteDescriptionSet = false;
+
 
 const allThere = async (from, totalParts) => {
     for (let index = 1; index <= totalParts; index++) {
@@ -35,9 +39,11 @@ const allThere = async (from, totalParts) => {
       const exists = await valueExists("cache", `${from}-${index}`)
       if (!exists) {
         console.log(`we did not find ${from}-${index}`)
+        console.log(`we are missing part ${index} of ${totalParts}`)
         return false
       }
     }
+    console.log(`we have ${totalParts}/${totalParts}  parts in cache`)
     return true
   }
 
@@ -49,96 +55,149 @@ const allThere = async (from, totalParts) => {
       deleteKey('cache',`${from}-${index}`)
       message += value ?? ""
     }
-    console.log(`Assembled full SDP: ${message}`)
+    console.log(`Assembled full object: ${message}`)
     return message
   }
+  function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+function setupRTC(){
 
+if (pc) {
+  console.error('cannot create RTC connection if there is existing one');
+  return;
+}
+
+console.log(`setting up RTC Peerconnection`);
+pc = new RTCPeerConnection();
+// RTC Connection event handlers
+localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+// Ice candidate event
+pc.onicecandidate = e => {
+  const message = {
+    type: 'candidate',
+    candidate: null,
+  };
+  if (e.candidate) {
+    message.candidate = e.candidate.candidate;
+    message.sdpMid = e.candidate.sdpMid;
+    message.sdpMLineIndex = e.candidate.sdpMLineIndex;
+  }
+  publish('cache', 'visitor:abc:inbox', JSON.stringify(message));
+  //signaling.postMessage(message);
+};
+pc.ontrack = (e) => {
+  console.log('[ontrack] Received track:', e.track.kind);
+  console.log('[ontrack] MediaStream:', e.streams[0]);
+
+  e.streams[0].getTracks().forEach(track => {
+    console.log('[ontrack] Stream contains track:', track.kind);
+  });
+  try {
+    remoteVideo.srcObject = e.streams[0];
+  } catch (error) {
+    console.error('Error setting remote video source:', error);
+  }
+
+}}
 // MAIN EVENT HANDLER
 async function onEvent(e){
 
   console.log('event', e);
   
   switch (e.type) {
-    case 'offer':
-      // A visitor is sending an offer
-      // These come in 2 parts (limits on message size), so we need to
-      // 1. Receive the offer and the part count
-      // 2. Just save it in the cache
-      // 3. Check if we have all the parts
-      // 4. If we do, we will piece it together
-      // 5. We need to set up the local stream
-      // 6. Set the remote description with the offer
-      // 7. Create an answer
-      // 8. Send the answer back to the visitor in 2 parts
-      // 9. Set the local description with the answer
-      // 10. Set the state to active
-      // 1. Receive the offer and the part count
-      const { part, totalParts, sdpFragment, from } = e
-      // 2. Just save it in the cache
-      await setKey("cache", `${from}-${part}`, sdpFragment)
-      // 3. Check if we have all the parts
-      const ready = await allThere(from, totalParts)
-      console.log(`ready: ${ready}`)
-      if (ready) {
-        // 4. If we do, we will piece it together
-        const fullSdp = await pieceTogether(from, totalParts)
-        //console.log("Assembled full SDP:", fullSdp)
+    case 'offer': {
+  const { part, totalParts, sdpFragment, from } = e;
 
+  // 2. Save the fragment in cache
+  await setKey("cache", `${from}-${part}`, sdpFragment);
 
-          // 5.1 Create a new peer connection
-          if (pc) {
-            console.error('existing peerconnection');
-            return;
-          }
-          await createPeerConnection();
+  // 3. Check if all parts are received
+  const ready = await allThere(from, totalParts);
+  if (!ready) break;
 
-          // 6. Set the remote description with the offer
-          await pc.setRemoteDescription({type: 'offer', sdp: fullSdp})
+  // 4. Piece together the full SDP
+  const fullSdp = await pieceTogether(from, totalParts);
+  console.log("Reconstructed offer SDP:", fullSdp);
 
-          // 7. Create an answer
-          const answer = await pc.createAnswer();
-          console.log(`Answer: ${answer}`)
+  // 5. Set up peer connection
+  await setupRTC();
 
-          // 8. Send the answer back to the visitor in 2 parts
-          const midpoint = Math.ceil(answer?.sdp?.length / 2)
-          const part1 = answer?.sdp.toString().slice(0, midpoint)
-          const part2 = answer?.sdp.toString().slice(midpoint)
-          //TODO: FROM NEEDS TO BE DYNAMIC
-          const sdpAnswerPart1 = {
-            from: 'xyz',
-            type: "answer",
-            part: "1",
-            totalParts: "2",
-            sdpFragment: part1,
-          }
-          const sdpAnswerPart2 = {
-            from: 'xyz',
-            type: "answer",
-            part: "2",
-            totalParts: "2",
-            sdpFragment: part2,
-          }
-          console.log(`${sdpAnswerPart1} ${sdpAnswerPart2}`)
-          await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1))
-          await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2))
-        }    
-      break;
+  // 6. Set remote description with the full offer
+  try {
+    await pc.setRemoteDescription({ type: 'offer', sdp: fullSdp });
+    console.log("Remote description set successfully.");
+  } catch (err) {
+    console.error("Failed to set remote description:", err);
+    break;
+  }
+
+  // 7. Create an answer
+  let answer;
+  try {
+    answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    console.log("Local description set with answer.");
+  } catch (err) {
+    console.error("Failed to create or set local description:", err);
+    break;
+  }
+
+  // 8. Split answer SDP into two parts
+  const midpoint = Math.ceil(answer.sdp.length / 2);
+  const part1 = answer.sdp.slice(0, midpoint);
+  const part2 = answer.sdp.slice(midpoint);
+
+  const sdpAnswerPart1 = {
+    from: 'xyz', // TODO: make dynamic
+    type: "answer",
+    part: "1",
+    totalParts: "2",
+    sdpFragment: part1,
+  };
+  const sdpAnswerPart2 = {
+    from: 'xyz',
+    type: "answer",
+    part: "2",
+    totalParts: "2",
+    sdpFragment: part2,
+  };
+
+  // 9. Send answer parts to visitor
+  await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1));
+  await sleep(500); // optional: lower delay for speed
+  await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2));
+
+  // 10. Handle any buffered ICE candidates
+  remoteDescriptionSet = true;
+  remoteCandidatesBuffer.forEach(candidate => {
+    pc.addIceCandidate(new RTCIceCandidate(candidate))
+      .catch(e => console.error("Error adding ICE candidate from buffer:", e));
+  });
+  remoteCandidatesBuffer = [];
+
+  console.log(`Signaling state: ${pc.signalingState}`);
+  break;
+}
+
     case 'answer':
       handleAnswer(e);
       break;
     case 'candidate':
-      handleCandidate(e);
+      handleRemoteIceCandidate(e);
       break;
     case 'call':
+      // A visitor is calling
       const acceptCallMessage = {
         from: 'xyz',
         type: 'call-accepted',
       }
-      // 5. We need to set up the local stream
+      // We need to set up the local stream
       localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
       localVideo.srcObject = localStream;
-      
-      await publish('cache','visitor:abc:inbox', JSON.stringify(acceptCallMessage))
+
+      // Automatically accept the call
+      publish('cache','visitor:abc:inbox', JSON.stringify(acceptCallMessage))
       break;
     case 'ready':
       // A second tab joined. This tab will initiate a call unless in a call already.
@@ -172,6 +231,14 @@ callButton.onclick = async () => {
   publish('cache','agent:xyz:inbox', JSON.stringify(callMessage))
 
 };
+function handleRemoteIceCandidate(candidate) {
+  if (remoteDescriptionSet) {
+    pc.addIceCandidate(new RTCIceCandidate(candidate))
+      .catch(e => console.error("Error adding ICE candidate:", e));
+  } else {
+    remoteCandidatesBuffer.push(candidate);
+  }
+}
 
 startButton.onclick = async () => {
   localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
@@ -201,6 +268,7 @@ async function hangup() {
 };
 
 function createPeerConnection() {
+  console.log('creating peer connection');
   pc = new RTCPeerConnection();
   pc.onicecandidate = e => {
     const message = {
