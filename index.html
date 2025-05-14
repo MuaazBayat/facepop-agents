@@ -49,33 +49,16 @@ async function handleAnswerClick() {
   hangupButton.disabled = false;
 }
 
-function createEventMessage(type){
+function createEventMessage(type, data = {}) {
+  const from = 'xyz'; // TODO: make dynamic
+  const to = 'abc';   // TODO: make dynamic
 
-  let from = 'xyz';
-  let to = 'abc';
-
-  // 0. Standard message structure
-  let message = {
-    from: from,
-    to: to,
-    type: type,
-  }
-
-  switch(type){
-    case 'call-accepted':
-      // no extra data needed
-      return JSON.stringify(message);
-      break;
-  }
-
-}
-
-async function handleHangupClick() {
-
-  hangupButton.disabled = true;
-  answerButton.disabled = false;
-
-  await hangup();
+  return JSON.stringify({
+    from,
+    to,
+    type,
+    ...data,
+  });
 }
 
 function setupRTC(){
@@ -109,6 +92,92 @@ function setupRTC(){
   }
 }
 
+async function trySetRemoteDescription(sdp) {
+  try {
+    await pc.setRemoteDescription({ type: 'offer', sdp });
+    console.log("Remote description set.");
+    return true;
+  } catch (err) {
+    console.error("Failed to set remote description:", err);
+    return false;
+  }
+}
+
+async function createAndSetAnswer() {
+  try {
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    console.log("Local description set with answer.");
+    return answer;
+  } catch (err) {
+    console.error("Failed to create/set local description:", err);
+    return null;
+  }
+}
+
+async function sendAnswerInFragments(sdp) {
+  const totalParts = 2;
+  const midpoint = Math.ceil(sdp.length / totalParts);
+
+  const fragments = [
+    sdp.slice(0, midpoint),
+    sdp.slice(midpoint)
+  ];
+
+  for (let i = 0; i < totalParts; i++) {
+    const message = createEventMessage('answer', {
+      part: (i + 1).toString(),
+      totalParts: totalParts.toString(),
+      sdpFragment: fragments[i],
+    });
+
+    await publish('cache', 'visitor:abc:inbox', message);
+    await sleep(300); // debounce to avoid flood
+  }
+}
+
+function flushBufferedCandidates() {
+  remoteDescriptionSet = true;
+  for (const candidate of remoteCandidatesBuffer) {
+    pc.addIceCandidate(new RTCIceCandidate(candidate))
+      .catch(e => console.error("Error adding buffered ICE candidate:", e));
+  }
+  remoteCandidatesBuffer = [];
+}
+
+async function handleOfferEvent(e) {
+  const { part, totalParts, sdpFragment, from } = e;
+
+  // 1. Save the received SDP fragment
+  await setKey("cache", `${from}-${part}`, sdpFragment);
+
+  // 2 . Wait until all parts are received
+  const ready = await allThere(from, totalParts);
+  if (!ready) {
+    console.log("Waiting for all SDP parts to arrive...");
+    return;
+  }
+
+  // 3. Reconstruct full SDP offer
+  const fullSdp = await pieceTogether(from, totalParts);
+
+  // 4. Set up the peer connection and handle RTC logic
+  await setupRTC();
+  const setOk = await trySetRemoteDescription(fullSdp);
+  if (!setOk) {
+    console.error("Failed to set remote description.");
+    return;
+  }
+
+  // 5. Create, set, and send the answer
+  const answer = await createAndSetAnswer();
+  await sendAnswerInFragments(answer.sdp);
+
+  // 6. Apply buffered ICE candidates
+  flushBufferedCandidates();
+}
+
+
 // MAIN EVENT HANDLER
 async function onEvent(e){
 
@@ -116,82 +185,11 @@ async function onEvent(e){
   console.log(`incoming event: ${e.type}`);
   
   switch (e.type) {
-    case 'offer': {
-      // offers are tricky, sdp object is too large for momento message
-
-      // PART 1: offer
-      const { part, totalParts, sdpFragment, from } = e;
-      // 1. Save the fragment in cache
-      await setKey("cache", `${from}-${part}`, sdpFragment);
-      // 2. Check if all parts are received
-      const ready = await allThere(from, totalParts);
-      // 3. If not all parts are received, wait for them
-      if (!ready) {
-        console.log(`Waiting for all parts to arrive...`);
-        break;
-      }
-      // 4. Piece together the full SDP
-      const fullSdp = await pieceTogether(from, totalParts);
-      // 5. Set up peer connection
-      await setupRTC();
-      // 6. Set remote description with the full offer
-      try {
-        await pc.setRemoteDescription({ type: 'offer', sdp: fullSdp });
-        console.log("Remote description set successfully.");
-      } catch (err) {
-        console.error("Failed to set remote description:", err);
-        break;
-      }
-
-      // PART 2: answer
-      // 1. Create an answer
-      let answer;
-      try {
-        answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        console.log("Local description set with answer.");
-      } catch (err) {
-        console.error("Failed to create or set local description:", err);
-        break;
-      }
-
-      // 2. Split answer SDP into two parts
-      const midpoint = Math.ceil(answer.sdp.length / 2);
-      const part1 = answer.sdp.slice(0, midpoint);
-      const part2 = answer.sdp.slice(midpoint);
-
-      const sdpAnswerPart1 = {
-        from: 'xyz', // TODO: make dynamic
-        type: "answer",
-        part: "1",
-        totalParts: "2",
-        sdpFragment: part1,
-      };
-      const sdpAnswerPart2 = {
-        from: 'xyz',
-        type: "answer",
-        part: "2",
-        totalParts: "2",
-        sdpFragment: part2,
-      };
-
-      // 3. Send answer parts to visitor
-      await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1));
-      await sleep(500); // optional: lower delay for speed
-      await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2));
-
-      // 4. Handle any buffered ICE candidates
-      remoteDescriptionSet = true;
-      remoteCandidatesBuffer.forEach(candidate => {
-        pc.addIceCandidate(new RTCIceCandidate(candidate))
-          .catch(e => console.error("Error adding ICE candidate from buffer:", e));
-      });
-      remoteCandidatesBuffer = [];
-      break;
-    }
-
-    case 'answer':
-      handleAnswer(e);
+    case 'offer':
+      // offers are tricky!
+      // we have to jump through a few hoops to get the offer
+      // and respond to it with an answer.
+      await handleOfferEvent(e);
       break;
     case 'candidate':
       handleRemoteIceCandidate(e);
@@ -200,18 +198,9 @@ async function onEvent(e){
       // A visitor is calling
       console.log('Visitor is calling');
       break;
-    case 'ready':
-      // A second tab joined. This tab will initiate a call unless in a call already.
-      if (pc) {
-        console.log('already in call, ignoring');
-        return;
-      }
-      makeCall();
-      break;
-    case 'bye':
-      if (pc) {
-        hangup();
-      }
+    case 'hangup':
+      console.log('Remote hung up');
+      await hangup();
       break;
     default:
       console.log('unhandled', e);
@@ -219,16 +208,38 @@ async function onEvent(e){
   }
 }
 
+async function handleHangupClick() {
+  hangupButton.disabled = true;
+  answerButton.disabled = false;
+
+  // Notify remote peer you're hanging up
+  const message = createEventMessage('hangup');
+  await publish('cache', 'visitor:abc:inbox', message);
+
+  await hangup();
+}
+
 async function hangup() {
   if (pc) {
     pc.close();
     pc = null;
   }
-  localStream.getTracks().forEach(track => track.stop());
-  localStream = null;
-  startButton.disabled = false;
+
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = null;
+  }
+
+  remoteVideo.srcObject = null;
+  localVideo.srcObject = null;
+
+  remoteCandidatesBuffer = [];
+  remoteDescriptionSet = false;
+
   hangupButton.disabled = true;
-};
+  answerButton.disabled = false;
+}
+
 
 function handleRemoteIceCandidate(candidate) {
   if (remoteDescriptionSet) {
