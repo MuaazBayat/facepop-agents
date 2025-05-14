@@ -7,12 +7,12 @@ import {  getKey, deleteKey, valueExists, publish  } from './momento.js';
  * @returns {Promise<boolean>} - True if all parts exist, false otherwise.
  */
 
-export const allThere = async (from, totalParts) => {
+export const allThere = async (cacheName, from, totalParts) => {
     for (let index = 1; index <= totalParts; index++) {
       const key = `${from}-${index}`;
       console.log(`Checking if cache contains: ${key}`);
       
-      const exists = await valueExists("cache", key);
+      const exists = await valueExists(cacheName, key);
       if (!exists) {
         console.log(`Missing part: ${key} (${index}/${totalParts})`);
         return false;
@@ -30,13 +30,13 @@ export const allThere = async (from, totalParts) => {
  * @returns {Promise<string>} - The reconstructed message.
  */
 
-export const pieceTogether = async (from, totalParts) => {
+export const pieceTogether = async (cacheName, from, totalParts) => {
   let message = "";
 
   for (let index = 1; index <= totalParts; index++) {
     const key = `${from}-${index}`;
-    const value = await getKey("cache", key);
-    await deleteKey("cache", key);
+    const value = await getKey(cacheName, key);
+    await deleteKey(cacheName, key);
 
     message += value ?? "";
   }
@@ -55,20 +55,20 @@ export function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export async function sendAnswerInFragments(sdp) {
+export async function sendAnswerInFragments(cacheName, agentId, visitorId, sdp) {
     const totalParts = 2;
     const mid = Math.ceil(sdp.length / totalParts);
     const fragments = [sdp.slice(0, mid), sdp.slice(mid)];
   
     for (let i = 0; i < fragments.length; i++) {
-      await publish('cache', `visitor:abc:inbox`, JSON.stringify({
-        from: 'xyz',
-        to: 'abc',
+      await publish(cacheName, `visitor:${visitorId}:inbox`, JSON.stringify({
+        from: agentId,
+        to: visitorId,
         type: 'answer',
-        part: (i + 1).toString(),
-        totalParts: totalParts.toString(),
+        part: (i + 1),
+        totalParts: totalParts,
         sdpFragment: fragments[i],
       }));
-      await sleep(300);
+      await sleep(1000);
     }
   }
