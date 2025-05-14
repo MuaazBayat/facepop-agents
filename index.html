@@ -6,21 +6,20 @@
     <video id="remoteVideo" autoplay></video>
 
     <div class="box">
-        <button id="startButton">Start</button>
-        <button id="callButton">Call</button>
+        <button id="answerButton">Answer</button>
         <button id="hangupButton">Hang Up</button>
     </div>
 
 </div>
 <script type="module">
 import { initMomento, subscribeToMessages, publish, getKey, setKey, deleteKey, valueExists  } from './src/momento.js';
+import { allThere, pieceTogether, sleep } from './src/utils.js';
 
 initMomento();
 subscribeToMessages('cache', 'agent:xyz:inbox', onEvent)
 
-const startButton = document.getElementById('startButton');
+const answerButton = document.getElementById('answerButton');
 const hangupButton = document.getElementById('hangupButton');
-const callButton = document.getElementById('callButton');
 hangupButton.disabled = true;
 
 const localVideo = document.getElementById('localVideo');
@@ -32,153 +31,164 @@ let remoteStream;
 let remoteCandidatesBuffer = [];
 let remoteDescriptionSet = false;
 
+answerButton.onclick = handleAnswerClick;
+hangupButton.onclick = handleHangupClick;
 
-const allThere = async (from, totalParts) => {
-    for (let index = 1; index <= totalParts; index++) {
-      console.log(`checking cache.. if ${from}-${index} has a value`)
-      const exists = await valueExists("cache", `${from}-${index}`)
-      if (!exists) {
-        console.log(`we did not find ${from}-${index}`)
-        console.log(`we are missing part ${index} of ${totalParts}`)
-        return false
-      }
-    }
-    console.log(`we have ${totalParts}/${totalParts}  parts in cache`)
-    return true
-  }
+async function handleAnswerClick() {
 
-  const pieceTogether = async (from, totalParts) => {
-    let message = ""
-    for (let index = 1; index <= totalParts; index++) {
-      const value = await getKey("cache", `${from}-${index}`)
-      // We dont want them chilling in the cache
-      deleteKey('cache',`${from}-${index}`)
-      message += value ?? ""
-    }
-    console.log(`Assembled full object: ${message}`)
-    return message
-  }
-  function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  // 1. Setup local stream and get user media
+  localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
+  localVideo.srcObject = localStream;
+
+  // 2. Build call-accepted message and set it to visitor
+  let message = createEventMessage('call-accepted');
+  publish('cache','visitor:abc:inbox', message)
+
+  // 3. Debounce so agent can't spam the answer button
+  answerButton.disabled = true;
+  hangupButton.disabled = false;
 }
+
+function createEventMessage(type){
+
+  let from = 'xyz';
+  let to = 'abc';
+
+  // 0. Standard message structure
+  let message = {
+    from: from,
+    to: to,
+    type: type,
+  }
+
+  switch(type){
+    case 'call-accepted':
+      // no extra data needed
+      return JSON.stringify(message);
+      break;
+  }
+
+}
+
+async function handleHangupClick() {
+
+  hangupButton.disabled = true;
+  answerButton.disabled = false;
+
+  await hangup();
+}
+
 function setupRTC(){
+  if (pc) {
+    console.error('cannot create RTC connection if there is existing one');
+    return;
+  }
+  console.log(`setting up RTC Peerconnection`);
+  pc = new RTCPeerConnection();
+  
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-if (pc) {
-  console.error('cannot create RTC connection if there is existing one');
-  return;
+  // RTC Connection event handlers:
+  // - Ice candidate event:
+  pc.onicecandidate = e => {
+    const message = {
+      type: 'candidate',
+      candidate: null,
+    };
+    if (e.candidate) {
+      message.candidate = e.candidate.candidate;
+      message.sdpMid = e.candidate.sdpMid;
+      message.sdpMLineIndex = e.candidate.sdpMLineIndex;
+    }
+    publish('cache', 'visitor:abc:inbox', JSON.stringify(message));
+  };
+  // - Track event:
+  pc.ontrack = (e) => {
+    try { remoteVideo.srcObject = e.streams[0]; } 
+    catch (error) { console.error('Error setting remote video source:', error); }
+  }
 }
 
-console.log(`setting up RTC Peerconnection`);
-pc = new RTCPeerConnection();
-// RTC Connection event handlers
-localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-// Ice candidate event
-pc.onicecandidate = e => {
-  const message = {
-    type: 'candidate',
-    candidate: null,
-  };
-  if (e.candidate) {
-    message.candidate = e.candidate.candidate;
-    message.sdpMid = e.candidate.sdpMid;
-    message.sdpMLineIndex = e.candidate.sdpMLineIndex;
-  }
-  publish('cache', 'visitor:abc:inbox', JSON.stringify(message));
-  //signaling.postMessage(message);
-};
-pc.ontrack = (e) => {
-  console.log('[ontrack] Received track:', e.track.kind);
-  console.log('[ontrack] MediaStream:', e.streams[0]);
-
-  e.streams[0].getTracks().forEach(track => {
-    console.log('[ontrack] Stream contains track:', track.kind);
-  });
-  try {
-    remoteVideo.srcObject = e.streams[0];
-  } catch (error) {
-    console.error('Error setting remote video source:', error);
-  }
-
-}}
 // MAIN EVENT HANDLER
 async function onEvent(e){
 
-  console.log('event', e);
+  // 0. we only care about the type, too much detail in the rest
+  console.log(`incoming event: ${e.type}`);
   
   switch (e.type) {
     case 'offer': {
-  const { part, totalParts, sdpFragment, from } = e;
+      // offers are tricky, sdp object is too large for momento message
 
-  // 2. Save the fragment in cache
-  await setKey("cache", `${from}-${part}`, sdpFragment);
+      // PART 1: offer
+      const { part, totalParts, sdpFragment, from } = e;
+      // 1. Save the fragment in cache
+      await setKey("cache", `${from}-${part}`, sdpFragment);
+      // 2. Check if all parts are received
+      const ready = await allThere(from, totalParts);
+      // 3. If not all parts are received, wait for them
+      if (!ready) {
+        console.log(`Waiting for all parts to arrive...`);
+        break;
+      }
+      // 4. Piece together the full SDP
+      const fullSdp = await pieceTogether(from, totalParts);
+      // 5. Set up peer connection
+      await setupRTC();
+      // 6. Set remote description with the full offer
+      try {
+        await pc.setRemoteDescription({ type: 'offer', sdp: fullSdp });
+        console.log("Remote description set successfully.");
+      } catch (err) {
+        console.error("Failed to set remote description:", err);
+        break;
+      }
 
-  // 3. Check if all parts are received
-  const ready = await allThere(from, totalParts);
-  if (!ready) break;
+      // PART 2: answer
+      // 1. Create an answer
+      let answer;
+      try {
+        answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        console.log("Local description set with answer.");
+      } catch (err) {
+        console.error("Failed to create or set local description:", err);
+        break;
+      }
 
-  // 4. Piece together the full SDP
-  const fullSdp = await pieceTogether(from, totalParts);
-  console.log("Reconstructed offer SDP:", fullSdp);
+      // 2. Split answer SDP into two parts
+      const midpoint = Math.ceil(answer.sdp.length / 2);
+      const part1 = answer.sdp.slice(0, midpoint);
+      const part2 = answer.sdp.slice(midpoint);
 
-  // 5. Set up peer connection
-  await setupRTC();
+      const sdpAnswerPart1 = {
+        from: 'xyz', // TODO: make dynamic
+        type: "answer",
+        part: "1",
+        totalParts: "2",
+        sdpFragment: part1,
+      };
+      const sdpAnswerPart2 = {
+        from: 'xyz',
+        type: "answer",
+        part: "2",
+        totalParts: "2",
+        sdpFragment: part2,
+      };
 
-  // 6. Set remote description with the full offer
-  try {
-    await pc.setRemoteDescription({ type: 'offer', sdp: fullSdp });
-    console.log("Remote description set successfully.");
-  } catch (err) {
-    console.error("Failed to set remote description:", err);
-    break;
-  }
+      // 3. Send answer parts to visitor
+      await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1));
+      await sleep(500); // optional: lower delay for speed
+      await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2));
 
-  // 7. Create an answer
-  let answer;
-  try {
-    answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
-    console.log("Local description set with answer.");
-  } catch (err) {
-    console.error("Failed to create or set local description:", err);
-    break;
-  }
-
-  // 8. Split answer SDP into two parts
-  const midpoint = Math.ceil(answer.sdp.length / 2);
-  const part1 = answer.sdp.slice(0, midpoint);
-  const part2 = answer.sdp.slice(midpoint);
-
-  const sdpAnswerPart1 = {
-    from: 'xyz', // TODO: make dynamic
-    type: "answer",
-    part: "1",
-    totalParts: "2",
-    sdpFragment: part1,
-  };
-  const sdpAnswerPart2 = {
-    from: 'xyz',
-    type: "answer",
-    part: "2",
-    totalParts: "2",
-    sdpFragment: part2,
-  };
-
-  // 9. Send answer parts to visitor
-  await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart1));
-  await sleep(500); // optional: lower delay for speed
-  await publish('cache', 'visitor:abc:inbox', JSON.stringify(sdpAnswerPart2));
-
-  // 10. Handle any buffered ICE candidates
-  remoteDescriptionSet = true;
-  remoteCandidatesBuffer.forEach(candidate => {
-    pc.addIceCandidate(new RTCIceCandidate(candidate))
-      .catch(e => console.error("Error adding ICE candidate from buffer:", e));
-  });
-  remoteCandidatesBuffer = [];
-
-  console.log(`Signaling state: ${pc.signalingState}`);
-  break;
-}
+      // 4. Handle any buffered ICE candidates
+      remoteDescriptionSet = true;
+      remoteCandidatesBuffer.forEach(candidate => {
+        pc.addIceCandidate(new RTCIceCandidate(candidate))
+          .catch(e => console.error("Error adding ICE candidate from buffer:", e));
+      });
+      remoteCandidatesBuffer = [];
+      break;
+    }
 
     case 'answer':
       handleAnswer(e);
@@ -188,16 +198,7 @@ async function onEvent(e){
       break;
     case 'call':
       // A visitor is calling
-      const acceptCallMessage = {
-        from: 'xyz',
-        type: 'call-accepted',
-      }
-      // We need to set up the local stream
-      localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
-      localVideo.srcObject = localStream;
-
-      // Automatically accept the call
-      publish('cache','visitor:abc:inbox', JSON.stringify(acceptCallMessage))
+      console.log('Visitor is calling');
       break;
     case 'ready':
       // A second tab joined. This tab will initiate a call unless in a call already.
@@ -218,44 +219,6 @@ async function onEvent(e){
   }
 }
 
-callButton.onclick = async () => {
-
-  startButton.disabled = true;
-  hangupButton.disabled = false;
-
-  const callMessage = {
-    from: 'abc',
-    type: "call",
-  }
-
-  publish('cache','agent:xyz:inbox', JSON.stringify(callMessage))
-
-};
-function handleRemoteIceCandidate(candidate) {
-  if (remoteDescriptionSet) {
-    pc.addIceCandidate(new RTCIceCandidate(candidate))
-      .catch(e => console.error("Error adding ICE candidate:", e));
-  } else {
-    remoteCandidatesBuffer.push(candidate);
-  }
-}
-
-startButton.onclick = async () => {
-  localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
-  localVideo.srcObject = localStream;
-
-
-  startButton.disabled = true;
-  hangupButton.disabled = false;
-
-  signaling.postMessage({type: 'ready'});
-};
-
-hangupButton.onclick = async () => {
-  hangup();
-  signaling.postMessage({type: 'bye'});
-};
-
 async function hangup() {
   if (pc) {
     pc.close();
@@ -267,69 +230,15 @@ async function hangup() {
   hangupButton.disabled = true;
 };
 
-function createPeerConnection() {
-  console.log('creating peer connection');
-  pc = new RTCPeerConnection();
-  pc.onicecandidate = e => {
-    const message = {
-      type: 'candidate',
-      candidate: null,
-    };
-    if (e.candidate) {
-      message.candidate = e.candidate.candidate;
-      message.sdpMid = e.candidate.sdpMid;
-      message.sdpMLineIndex = e.candidate.sdpMLineIndex;
-    }
-    //signaling.postMessage(message);
-  };
-  pc.ontrack = e => remoteVideo.srcObject = e.streams[0];
-  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
-}
-
-async function makeCall() {
-  await createPeerConnection();
-
-  const offer = await pc.createOffer();
-  signaling.postMessage({type: 'offer', sdp: offer.sdp});
-  await pc.setLocalDescription(offer);
-}
-
-async function handleOffer(offer) {
-  localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: true});
-  localVideo.srcObject = localStream;
-
-  if (pc) {
-    console.error('existing peerconnection');
-    return;
-  }
-
-  await createPeerConnection();
-  await pc.setRemoteDescription(offer);
-
-  const answer = await pc.createAnswer();
-  signaling.postMessage({type: 'answer', sdp: answer.sdp});
-  await pc.setLocalDescription(answer);
-}
-
-async function handleAnswer(answer) {
-  if (!pc) {
-    console.error('no peerconnection');
-    return;
-  }
-  await pc.setRemoteDescription(answer);
-}
-
-async function handleCandidate(candidate) {
-  if (!pc) {
-    console.error('no peerconnection');
-    return;
-  }
-  if (!candidate.candidate) {
-    await pc.addIceCandidate(null);
+function handleRemoteIceCandidate(candidate) {
+  if (remoteDescriptionSet) {
+    pc.addIceCandidate(new RTCIceCandidate(candidate))
+      .catch(e => console.error("Error adding ICE candidate:", e));
   } else {
-    await pc.addIceCandidate(candidate);
+    remoteCandidatesBuffer.push(candidate);
   }
 }
+
 </script>
 </body>
 </html>
