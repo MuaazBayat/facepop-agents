@@ -40,6 +40,7 @@ export async function subscribeToMessages(cacheName, topic, handle) {
         try {
           const data = JSON.parse(msg.value());
           handle(data);
+          console.log(`subscribed to topic ${topic}:`, data);
         } catch (e) {
           console.error("Failed to parse message value as JSON:", e);
         }

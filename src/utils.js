@@ -1,4 +1,4 @@
-import {  getKey, deleteKey, valueExists  } from './momento.js';
+import {  getKey, deleteKey, valueExists, publish  } from './momento.js';
 
 /**
  * Checks if all parts of a message exist in cache.
@@ -54,4 +54,21 @@ export const pieceTogether = async (from, totalParts) => {
 export function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
+
+export async function sendAnswerInFragments(sdp) {
+    const totalParts = 2;
+    const mid = Math.ceil(sdp.length / totalParts);
+    const fragments = [sdp.slice(0, mid), sdp.slice(mid)];
   
+    for (let i = 0; i < fragments.length; i++) {
+      await publish('cache', `visitor:abc:inbox`, JSON.stringify({
+        from: 'xyz',
+        to: 'abc',
+        type: 'answer',
+        part: (i + 1).toString(),
+        totalParts: totalParts.toString(),
+        sdpFragment: fragments[i],
+      }));
+      await sleep(300);
+    }
+  }
