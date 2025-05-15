@@ -1,63 +1,140 @@
-import { initMomento, subscribeToMessages, publish, setKey } from './momento.js';
-import { allThere, pieceTogether, sendAnswerInFragments } from './utils.js';
+import { publish, setKey } from './momento.js';
+import { sendAnswerInFragments } from './utils.js';
+import { start } from './setup.js';
+let activeCall = null;
+
+const agentId = 'xyz';
+
+await start();
+const cacheName = import.meta.env.VITE_CACHE_NAME;
 
 const answerButton = document.getElementById('answerButton');
 const hangupButton = document.getElementById('hangupButton');
 const localVideo = document.getElementById('localVideo');
 const remoteVideo = document.getElementById('remoteVideo');
+const statusCard = document.querySelector('.status-card');
+const toggle = document.getElementById('onlineToggle');
+const header = document.querySelector('.header-bar');
+const agentIdBar = document.getElementById('agent-name');
+agentIdBar.textContent = agentId;
+const offerFragments = new Map(); // Map<from, { totalParts, parts: Map<index, sdpFragment> }>
+
+hangupButton.disabled = true;
+answerButton.disabled = true;
+
+toggle.addEventListener('change', updateHeaderColor);
+// Set initial color
+updateHeaderColor();
+
+function updateHeaderColor() {
+  if (toggle.checked) {
+    setKey('agent', `${agentId}-online`,`true`)
+    header.classList.add('header-online');
+    header.classList.remove('header-offline');
+  } else {
+    setKey('agent', `${agentId}-online`,`false`)
+    header.classList.add('header-offline');
+    header.classList.remove('header-online');
+  }
+}
 
 let pc;
 let localStream;
 let remoteCandidatesBuffer = [];
 let remoteDescriptionSet = false;
 
-const cacheName = 'test';
-const agentId = 'xyz';
-const visitorId = 'abc';
 
-await initMomento();
-subscribeToMessages(cacheName, `agent:${agentId}:inbox`, onEvent);
+answerButton.onclick = () => {
+  if (!activeCall) {
+    console.error("No active call to answer");
+    return;
+  }
+  handleAnswerClick(activeCall);
+};
 
-answerButton.onclick = handleAnswerClick;
-hangupButton.onclick = handleHangupClick;
+hangupButton.onclick = () => {
+  if (!activeCall) {
+    console.error("No active call to hang up");
+    return;
+  }
+  handleHangupClick(activeCall);
+};
 
-async function handleAnswerClick() {
+
+async function handleAnswerClick(call) {
+  const visitorId = call.visitorId;
+  if (!visitorId) {
+    console.error("visitorId is not set before answering!");
+    return;
+  }
+
   localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
   localVideo.srcObject = localStream;
 
-  publish(cacheName, `visitor:${visitorId}:inbox`, createEventMessage('call-accepted'));
+  publish(cacheName, `visitor:${visitorId}:inbox`, createEventMessage('call-accepted', call));
 
   answerButton.disabled = true;
   hangupButton.disabled = false;
 }
 
-async function handleHangupClick() {
-  publish(cacheName, `visitor:${visitorId}:inbox`, createEventMessage('hangup'));
+async function handleHangupClick(call) {
+  const visitorId = call.visitorId;
+  if (!visitorId) {
+    console.error("visitorId is not set before answering!");
+    return;
+  }
+  const message = createEventMessage('hangup', activeCall);
+  await publish(cacheName, `visitor:${visitorId}:inbox`, message);
+
   await hangup();
 }
 
 function createEventMessage(type, data = {}) {
+  if (!activeCall?.visitorId) {
+    console.error("Missing visitorId in createEventMessage");
+    return '{}';
+  }
+
   return JSON.stringify({
     from: agentId,
-    to: visitorId,
+    to: activeCall.visitorId,
     type,
     ...data,
   });
 }
 
-async function onEvent(e) {
+export async function onEvent(e) {
   console.log(`incoming event: ${e.type}`);
 
   switch (e.type) {
     case 'offer':
+      statusCard.className = 'status-card on-call';
+      statusCard.textContent = 'on call';
       await handleOfferEvent(e);
       break;
     case 'candidate':
       handleRemoteIceCandidate(e);
       break;
-    case 'call':
-      console.log("Visitor is calling...");
-      break;
+      case 'call':
+        if (activeCall) {
+          console.warn("Ignoring new call from", e.from, "because a call is already active.");
+          return;
+        }
+      
+        activeCall = {
+          visitorId: e.from
+        };
+      
+        console.log("Incoming call from", activeCall.visitorId);
+      
+        answerButton.onclick = () => handleAnswerClick(activeCall);
+        hangupButton.onclick = () => handleHangupClick(activeCall);
+      
+        statusCard.className = 'status-card incoming';
+        statusCard.textContent = 'incoming call...';
+        answerButton.disabled = false;
+        hangupButton.disabled = false;
+        break;
     case 'hangup':
       await hangup();
       break;
@@ -69,12 +146,34 @@ async function onEvent(e) {
 async function handleOfferEvent(e) {
   const { part, totalParts, sdpFragment, from } = e;
 
-  await setKey(cacheName, `${from}-${part}`, sdpFragment);
+  // lets use in memory cache for now
+  // Initialize if not present
+  if (!offerFragments.has(from)) {
+    offerFragments.set(from, {
+      totalParts,
+      parts: new Map()
+    });
+  }
 
-  const ready = await allThere(cacheName, from, totalParts);
-  if (!ready) return;
+  const entry = offerFragments.get(from);
+  entry.parts.set(part, sdpFragment);
 
-  const fullSdp = await pieceTogether(cacheName, from, totalParts);
+  // Check if all parts are received
+  if (entry.parts.size < totalParts) return;
+
+  // Reassemble full SDP
+  let fullSdp = "";
+  for (let i = 1; i <= totalParts; i++) {
+    const fragment = entry.parts.get(i);
+    if (!fragment) {
+      console.error(`Missing fragment ${i} from ${from}`);
+      return;
+    }
+    fullSdp += fragment;
+  }
+
+  // Clean up
+  offerFragments.delete(from);
 
   // Ensure local stream is ready first
   if (!localStream) {
@@ -91,7 +190,7 @@ async function handleOfferEvent(e) {
   const answer = await pc.createAnswer(); // create after remoteDescription is set
   await pc.setLocalDescription(answer);
 
-  await sendAnswerInFragments(cacheName, agentId, visitorId, answer.sdp);
+  await sendAnswerInFragments(cacheName, agentId, activeCall.visitorId, answer.sdp);
   flushBufferedCandidates();
 }
 
@@ -104,7 +203,11 @@ function setupRTC() {
 
   pc.onicecandidate = e => {
     if (e.candidate) {
-      publish(cacheName, `visitor:${visitorId}:inbox`, JSON.stringify({
+      if (!activeCall?.visitorId) {
+        console.error("Missing visitorId when publishing ICE candidate");
+        return;
+      }
+      publish(cacheName, `visitor:${activeCall.visitorId}:inbox`, JSON.stringify({
         type: 'candidate',
         candidate: e.candidate.toJSON()
       }));
@@ -150,6 +253,9 @@ function flushBufferedCandidates() {
 }
 
 async function hangup() {
+  statusCard.className = 'status-card ended';
+  statusCard.textContent = 'call ended';
+
   if (pc) {
     pc.close();
     pc = null;
@@ -163,6 +269,8 @@ async function hangup() {
   localVideo.srcObject = null;
   remoteCandidatesBuffer = [];
   remoteDescriptionSet = false;
+
+  activeCall = null;
 
   answerButton.disabled = false;
   hangupButton.disabled = true;
