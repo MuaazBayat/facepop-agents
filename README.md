@@ -17,6 +17,8 @@ This is the **Agent Interface** for the **P2P Video Modal**, a real-time video c
 - 🎨 Basic HTML/CSS
 
 ---
+![image](https://github.com/user-attachments/assets/ea27d6db-e3bc-4dee-a9ab-b82b6d17ded5)
+![image](https://github.com/user-attachments/assets/ff19038d-5267-4511-aa29-57630d486ed1)
 
 ## 📁 Project Structure
 
