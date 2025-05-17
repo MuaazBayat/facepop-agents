@@ -1,4 +1,4 @@
-![Alt text](/public/ividiyo.png "ividiyo logo")
+![3](https://github.com/user-attachments/assets/0878ff64-326b-4cbd-a24e-36376784d20f)
 
 ## ividiyo Agents – P2P Video Modal
 
