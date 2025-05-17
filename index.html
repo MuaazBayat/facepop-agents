@@ -1,20 +1,52 @@
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="UTF-8" />
+    <title>ividiyo agents</title>
+    <link rel="icon" type="image/png" href="/facepop-agents/favicon.svg">
+  <script type="module" crossorigin src="/facepop-agents/assets/index-hbGD9UE-.js"></script>
+  <link rel="stylesheet" crossorigin href="/facepop-agents/assets/index-BM_pfJrs.css">
+</head>
 <body>
-  <head>
-    <link rel="icon" type="image/svg+xml" href="/facepop-agents/assets/favicon-DTQuvNQi.svg" />  
-    <script type="module" crossorigin src="/facepop-agents/assets/index-DztEPtsG.js"></script>
-  </head>
+<div class="header-bar"> 
+  <div class="visitor-card"> 
+    <label class="visitor-label">Live Site Visitors 👁️</label>
+    <label class="eye">:</label>
+    <label class="visitor-number">10</label>
+  </div>
+  <div class="online-card">
+  <div>
+    <label class="switch">
+      <input type="checkbox" id="onlineToggle" />
+      <span class="slider"></span>
+    </label>
+  </div>
+  <div class="online-label"> I am online</div>
+</div>
+</div>
+<br>
+<div class="main-content">
+<div class="agent-details">
+  <div class="agent-card">
+    <label class="agent-label">ID:</label>
+    <label class="agent-name" id="agent-name">loading...</label>
+  </div>
+</div>
 <div id="container">
-    <h1>ividiyo agents</h1>
-    <video id="localVideo" autoplay muted></video>
-    <video id="remoteVideo" autoplay></video>
+  <div class="status-card">
+    <div class="status"></div>
+  </div>
+  </div>
+  <div>
+    <video id="localVideo" class="local-video" autoplay muted></video>
+    <video id="remoteVideo" class="remote-video" autoplay></video>
 
-    <div class="box">
-        <button id="answerButton">Answer</button>
-        <button id="hangupButton">Hang Up</button>
-    </div>
-
+   
+  </div>
+  <div class="box">
+    <button id="answerButton">Answer</button>
+    <button id="hangupButton">Hang Up</button>
+</div>
 </div>
 </body>
 </html>
