@@ -1,9 +1,9 @@
 import { initMomento, subscribeToMessages } from './momento.js';
 import { onEvent} from './main.js';
 const cacheName = import.meta.env.VITE_CACHE_NAME;
-const agentId = 'xyz';
+//const agentId = 'xyz';
 
-export async function start() {
+export async function start(agentId) {
    
   try {
     const backendUrl = import.meta.env.VITE_BACKEND_URL;

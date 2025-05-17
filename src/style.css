@@ -21,6 +21,17 @@ button {
   transition: background-color 0.2s ease;
 }
 
+.id-set {
+  width: 55px;
+  border-radius: 4px;
+  font-family: monospace;
+  border: none;
+  background-color: black;
+  color: white;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
 button:hover:not(:disabled) {
   color: black;
   background-color: rgb(96, 216, 92);
@@ -131,7 +142,6 @@ button:disabled {
  input:checked + .slider:before {
   transform: translateX(1.5em);
  }
-
 
 /* States */
 .header-bar.header-online {

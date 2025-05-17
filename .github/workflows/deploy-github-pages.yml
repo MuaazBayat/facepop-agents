@@ -25,6 +25,8 @@ jobs:
         run: npm run build
         env:
           VITE_MOMENTO_AUTH_TOKEN: ${{ secrets.VITE_MOMENTO_AUTH_TOKEN }}
+          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL }}
+          VITE_CACHE_NAME: ${{ secrets.VITE_CACHE_NAME }}
 
 
       - name: Upload production-ready build files

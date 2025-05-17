@@ -1,11 +1,20 @@
 import { publish, setKey } from './momento.js';
 import { sendAnswerInFragments } from './utils.js';
 import { start } from './setup.js';
+
 let activeCall = null;
+let agentId;
 
-const agentId = 'xyz';
+const agentIdInput = document.getElementById('agentIdInput');
+const setAgentIdBtn = document.getElementById('setAgentIdBtn');
 
-await start();
+
+setAgentIdBtn.onclick = async () => {
+  agentId = agentIdInput.value;
+  console.log('Agent ID updated to:', agentIdInput.value);
+  await start(agentId);
+}
+
 const cacheName = import.meta.env.VITE_CACHE_NAME;
 
 const answerButton = document.getElementById('answerButton');
@@ -15,8 +24,7 @@ const remoteVideo = document.getElementById('remoteVideo');
 const statusCard = document.querySelector('.status-card');
 const toggle = document.getElementById('onlineToggle');
 const header = document.querySelector('.header-bar');
-const agentIdBar = document.getElementById('agent-name');
-agentIdBar.textContent = agentId;
+
 const offerFragments = new Map(); // Map<from, { totalParts, parts: Map<index, sdpFragment> }>
 
 hangupButton.disabled = true;
@@ -24,7 +32,6 @@ answerButton.disabled = true;
 
 toggle.addEventListener('change', updateHeaderColor);
 // Set initial color
-updateHeaderColor();
 
 function updateHeaderColor() {
   if (toggle.checked) {
