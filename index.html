@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
     <title>ividiyo agents</title>
     <link rel="icon" type="image/png" href="/facepop-agents/favicon.svg">
-  <script type="module" crossorigin src="/facepop-agents/assets/index-Dle0xC49.js"></script>
-  <link rel="stylesheet" crossorigin href="/facepop-agents/assets/index-BrkQd8gg.css">
+  <script type="module" crossorigin src="/facepop-agents/assets/index-CO0AcFuk.js"></script>
+  <link rel="stylesheet" crossorigin href="/facepop-agents/assets/index-DRGQH_A9.css">
 </head>
 <body>
 <div class="header-bar"> 
@@ -25,7 +25,28 @@
 </div>
 </div>
 <br>
+
 <div class="main-content">
+  <div class="instructions-section">
+    <button id="toggleInstructionsBtn">How to use</button>
+    <textarea id="instructionsBox" style="display: none;" rows="10" cols="80" readonly>
+  Welcome to ividiyo Agent Panel!
+  1. install the ividiyo package from npm
+  2. copy all of the files in the src folder to your project
+  3. copy the index.html file to your project
+  4. link the index.html to your style.css file
+  5. set the config.js file with following:
+  export const agentId =any unique id;
+  export const api='https://momento-vendor-564404908477.europe-west1.run.app';
+  export const cacheName='test'
+  6. Toggle "I am online" to become available for incoming calls.
+  7. Use the Agent ID input to set your unique agent identifier.
+  8. Wait for a call to appear, then click "Answer".
+  9. To end the call, click "Hang Up".
+  
+  Tip: Ensure camera and microphone access is allowed in your browser.
+    </textarea>
+  </div>
 <div class="agent-details">
   <div class="agent-card">
     <label class="agent-label">ID:</label>
@@ -49,5 +70,16 @@
     <button id="hangupButton">Hang Up</button>
 </div>
 </div>
+<script>
+  const toggleBtn = document.getElementById("toggleInstructionsBtn");
+const instructionsBox = document.getElementById("instructionsBox");
+
+toggleBtn.addEventListener("click", () => {
+  const isVisible = instructionsBox.style.display === "block";
+  instructionsBox.style.display = isVisible ? "none" : "block";
+  toggleBtn.textContent = isVisible ? "How" : "Hide Instructions";
+});
+
+</script>
 </body>
 </html>
