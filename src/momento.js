@@ -13,7 +13,7 @@ export async function initMomento(authToken) {
       momentoCacheClient = await CacheClient.create({
         configuration: Configurations.Laptop.v1(),
         credentialProvider: CredentialProvider.fromString(authToken),
-        defaultTtlSeconds: 60,
+        defaultTtlSeconds: 86400,
       });
       console.log(`Created Momento cache client`, momentoCacheClient);
     } catch (cacheErr) {
