@@ -202,13 +202,21 @@ async function handleOfferEvent(e) {
 }
 
 function setupRTC() {
-  pc = new RTCPeerConnection({
-    iceServers: [{ urls: 'stun:stun.l.google.com:19302' },{
-      urls: "relay1.expressturn.com:3480",
-      username: "174668951889717373",
-      credential: "ahP+p9uQNI0Ng7Sm6MNKCm5cDL0="
-    }]
-  });
+ pc = new RTCPeerConnection({
+  iceServers: [
+    { 
+      urls: 'stun:stun.l.google.com:19302' 
+    },
+    {
+      urls: 'stun:relay1.expressturn.com:3478'
+    },
+    {
+      urls: 'turn:relay1.expressturn.com:3478?transport=tcp',
+      username: '174668951889717373',
+      credential: 'ahP+p9uQNI0Ng7Sm6MNKCm5cDL0='
+    }
+  ]
+});
 
   localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
