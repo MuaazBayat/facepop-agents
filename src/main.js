@@ -272,25 +272,64 @@ function flushBufferedCandidates() {
 }
 
 async function hangup() {
-  statusCard.className = 'status-card ended';
-  statusCard.textContent = 'call ended';
+  if (hasHungUp) return;
+  hasHungUp = true;
 
-  if (pc) {
-    pc.close();
-    pc = null;
-  }
+  console.log('[hangup] Cleaning up connection and media...');
+
+  // Stop tracks from all media elements
+  document.querySelectorAll('video, audio').forEach(el => {
+    if (el.srcObject instanceof MediaStream) {
+      el.srcObject.getTracks().forEach(track => {
+        try {
+          track.stop();
+        } catch (e) {
+          console.warn('Could not stop track', e);
+        }
+      });
+      el.srcObject = null;
+    }
+  });
+
+  // Stop local stream tracks
   if (localStream) {
-    localStream.getTracks().forEach(t => t.stop());
+    localStream.getTracks().forEach(track => {
+      try {
+        track.stop();
+      } catch (e) {
+        console.warn('Could not stop local track', e);
+      }
+    });
     localStream = null;
   }
 
-  remoteVideo.srcObject = null;
-  localVideo.srcObject = null;
+  // Kill PC
+  if (pc) {
+    try {
+      pc.getSenders().forEach(sender => {
+        try {
+          if (sender.track) sender.track.stop();
+        } catch (e) {}
+      });
+      pc.onicecandidate = null;
+      pc.ontrack = null;
+      pc.close();
+    } catch (e) {
+      console.warn('Error closing pc', e);
+    }
+    pc = null;
+  }
+
+  // Clear state
   remoteCandidatesBuffer = [];
   remoteDescriptionSet = false;
+  offerFragments.clear?.();
 
-  activeCall = null;
-
-  answerButton.disabled = false;
+  // Reset UI
+  callButton.disabled = false;
   hangupButton.disabled = true;
+  statusText.textContent = 'Call ended';
+  container.className = 'card ended';
+
+  console.log('[hangup] Cleanup complete');
 }
